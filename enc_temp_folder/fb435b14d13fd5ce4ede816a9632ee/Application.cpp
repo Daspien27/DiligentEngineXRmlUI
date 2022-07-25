@@ -370,6 +370,7 @@ void application::render()
 	}
 
 	if (rml_render_interface) {
+	//	rml_render_interface->render_quad();
 		rml_render_interface->present_frame();
 	}
 }
@@ -419,6 +420,54 @@ diligent_rml_render_interface::diligent_rml_render_interface(application& app_in
 {
 	create_pipeline_states();
 }
+
+
+//const char* quad_vertex_source = R"(
+//
+//cbuffer constants {
+//	float4x4 transform;
+//	float2   translate;
+//};
+//
+//struct vs_input {
+//	float2 position   : ATTRIB0;
+//	float4 color0     : ATTRIB1;
+//	float2 tex_coord0 : ATTRIB2;
+//};
+//
+//struct PSInput 
+//{ 
+//    float4 position   : SV_POSITION;
+//	float4 color0     : COLOR0; 
+//};
+//
+//void main(in vs_input VSIn,
+//          out PSInput PSIn) 
+//{
+//    PSIn.color0   = VSIn.color0;
+//    PSIn.position = transform * float4(VSIn.position + translate, 0.0, 1.0);
+//}
+//)";
+//
+//const char* quad_pixel_source = R"(
+//struct PSInput 
+//{ 
+//    float4 position   : SV_POSITION;
+//	float4 color0     : COLOR0; 
+//};
+//
+//struct PSOutput
+//{ 
+//    float4 Color : SV_TARGET; 
+//};
+//
+//void main(in  PSInput  PSIn,
+//          out PSOutput PSOut)
+//{
+//    PSOut.Color = PSIn.color0;
+//}
+//)";
+
 
 static const char* rml_main_vertex_shader = R"(
 
@@ -486,6 +535,7 @@ void main(in ps_input ps_in, out ps_output ps_out) {
     ps_out.color = tex_color * ps_in.color;
 }
 )";
+
 
 namespace {
 	// uniform buffer for vertex shader
@@ -704,9 +754,9 @@ void diligent_rml_render_interface::EnableScissorRegion(bool enable)
 void diligent_rml_render_interface::SetScissorRegion(int x, int y, int width, int height)
 {
 	Diligent::Rect scissor;
-	scissor.left   = x;
-	scissor.right  = x + width;
-	scissor.top    = y;
+	scissor.left = x;
+	scissor.right = x + width;
+	scissor.top = y;
 	scissor.bottom = y + height;
 	app.immediate_context->SetScissorRects(1, &scissor, viewport_width, viewport_height);
 }
@@ -809,4 +859,72 @@ void diligent_rml_render_interface::present_frame()
 {
 	app.immediate_context->Flush();
 	app.swap_chain->Present();
+}
+
+void diligent_rml_render_interface::render_quad()
+{
+	using namespace Diligent;
+
+	// Memory requirements
+	RefCntAutoPtr<Diligent::IBuffer> rml_vertex_buffer;
+	RefCntAutoPtr<Diligent::IBuffer> rml_index_buffer;
+
+	const std::array quad_vertices{
+	Rml::Vertex{.position = Rml::Vector2f{150.0f, 150.0f}, .colour = Rml::Colourb{255, 0, 0}, .tex_coord = Rml::Vector2f{0.0f, 0.0f}},
+	Rml::Vertex{.position = Rml::Vector2f{150.0f, 0.0f}, .colour = Rml::Colourb{0, 255, 0}, .tex_coord = Rml::Vector2f{0.0f, 0.0f}},
+	Rml::Vertex{.position = Rml::Vector2f{0.0f, 0.0f}, .colour = Rml::Colourb{0, 0, 255}, .tex_coord = Rml::Vector2f{0.0f, 0.0f}},
+	Rml::Vertex{.position = Rml::Vector2f{0.0f, 150.0f}, .colour = Rml::Colourb{255, 255, 0}, .tex_coord = Rml::Vector2f{0.0f, 0.0f}}
+	};
+
+	const std::array quad_indices{
+		0u, 1u, 3u,
+		1u, 2u, 3u
+	};
+
+	//Compile geometry
+	BufferDesc vertex_buffer_descriptor;
+	vertex_buffer_descriptor.Name = "Rml vertex buffer";
+	vertex_buffer_descriptor.Usage = USAGE_IMMUTABLE;
+	vertex_buffer_descriptor.BindFlags = BIND_VERTEX_BUFFER;
+	vertex_buffer_descriptor.Size = quad_vertices.size() * sizeof(Rml::Vertex);
+	BufferData vertex_buffer_data;
+	vertex_buffer_data.pData = quad_vertices.data();
+	vertex_buffer_data.DataSize = quad_vertices.size() * sizeof(Rml::Vertex);
+	app.device->CreateBuffer(vertex_buffer_descriptor, &vertex_buffer_data, &rml_vertex_buffer);
+
+	BufferDesc index_buffer_desc;
+	index_buffer_desc.Name = "Rml index buffer";
+	index_buffer_desc.Usage = USAGE_IMMUTABLE;
+	index_buffer_desc.BindFlags = BIND_INDEX_BUFFER;
+	index_buffer_desc.Size = quad_indices.size() * sizeof(int);
+	BufferData index_buffer_data;
+	index_buffer_data.pData = quad_indices.data();
+	index_buffer_data.DataSize = quad_indices.size() * sizeof(int);
+	app.device->CreateBuffer(index_buffer_desc, &index_buffer_data, &rml_index_buffer);
+
+
+	auto& pair = (use_scissor) ? rml_color_w_scissor : rml_color; 
+	app.immediate_context->SetPipelineState(pair.pipeline_state);
+	app.immediate_context->CommitShaderResources(pair.shader_resource_binding, Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+
+	//Render geometry
+
+	Diligent::MapHelper<constants> cb_constants(app.immediate_context, rml_constants_buffer, Diligent::MAP_WRITE, Diligent::MAP_FLAG_DISCARD);
+	constants c;
+	c.transform = Diligent::float4x4::MakeMatrix(transform.data()).Transpose();
+	c.translate = Rml::Vector2f{ 0.0f, 0.0f };
+	
+	*cb_constants = c;
+
+	Diligent::Uint64 offset = 0;
+	std::array buffs = { rml_vertex_buffer.RawPtr() };
+	app.immediate_context->SetVertexBuffers(0, static_cast<unsigned int> (buffs.size()), buffs.data(), &offset, Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION, Diligent::SET_VERTEX_BUFFERS_FLAG_RESET);
+	app.immediate_context->SetIndexBuffer(rml_index_buffer, 0, Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+
+	Diligent::DrawIndexedAttribs draw_attributes;
+	draw_attributes.IndexType = VT_UINT32;
+	draw_attributes.NumIndices = static_cast<unsigned int> (quad_indices.size());
+	draw_attributes.Flags = Diligent::DRAW_FLAG_VERIFY_ALL;
+
+	app.immediate_context->DrawIndexed(draw_attributes);
 }

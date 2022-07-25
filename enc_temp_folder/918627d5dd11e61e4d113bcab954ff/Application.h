@@ -38,6 +38,7 @@ public:
 	void present_frame();
 	void set_viewport(int new_viewport_width, int new_viewport_height);
 
+	void render_quad();
 private:
 	void render_span_geometry(const std::span<Rml::Vertex>& vertices_span, const std::span<int>& indices_span, const Rml::Vector2f& translation, Rml::TextureHandle& texture);
 	void create_pipeline_states();
